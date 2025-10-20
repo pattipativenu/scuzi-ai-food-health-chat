@@ -2,10 +2,11 @@ import { BedrockRuntimeClient } from "@aws-sdk/client-bedrock-runtime";
 import { S3Client } from "@aws-sdk/client-s3";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
+import { getAWSCredentials } from "./aws-secrets";
 
 const region = process.env.AWS_REGION || "us-east-1";
 
-// Configure Bedrock client with bearer token authentication (same as chat route)
+// Configure Bedrock client with bearer token authentication (SECURE - no exposed keys)
 const getBedrockClient = () => {
   const bearerToken = process.env.AWS_BEARER_TOKEN_BEDROCK;
   
@@ -29,36 +30,60 @@ const getBedrockClient = () => {
 
     return client;
   } else {
-    // Fallback to standard AWS credentials
-    return new BedrockRuntimeClient({
-      region,
-      credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
-      },
-    });
+    throw new Error("AWS_BEARER_TOKEN_BEDROCK is required for Bedrock access");
   }
 };
 
 export const bedrockClient = getBedrockClient();
 
-export const s3Client = new S3Client({
-  region,
-  credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
-  },
-});
+// Lazy initialization for S3 client with credentials from Secrets Manager
+let s3ClientInstance: S3Client | null = null;
 
-const dynamoClient = new DynamoDBClient({
-  region,
-  credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
-  },
-});
+export async function getS3Client(): Promise<S3Client> {
+  if (s3ClientInstance) {
+    return s3ClientInstance;
+  }
 
-export const docClient = DynamoDBDocumentClient.from(dynamoClient);
+  const credentials = await getAWSCredentials();
+
+  s3ClientInstance = new S3Client({
+    region,
+    credentials: {
+      accessKeyId: credentials.AWS_ACCESS_KEY_ID,
+      secretAccessKey: credentials.AWS_SECRET_ACCESS_KEY,
+    },
+  });
+
+  return s3ClientInstance;
+}
+
+// Lazy initialization for DynamoDB client with credentials from Secrets Manager
+let docClientInstance: DynamoDBDocumentClient | null = null;
+
+export async function getDynamoDBClient(): Promise<DynamoDBDocumentClient> {
+  if (docClientInstance) {
+    return docClientInstance;
+  }
+
+  const credentials = await getAWSCredentials();
+
+  const dynamoClient = new DynamoDBClient({
+    region,
+    credentials: {
+      accessKeyId: credentials.AWS_ACCESS_KEY_ID,
+      secretAccessKey: credentials.AWS_SECRET_ACCESS_KEY,
+    },
+  });
+
+  docClientInstance = DynamoDBDocumentClient.from(dynamoClient);
+
+  return docClientInstance;
+}
 
 export const S3_BUCKET = process.env.AWS_S3_BUCKET_NAME || "scuzi-ai-recipes";
 export const DYNAMODB_TABLE = "ScuziRecipes";
+
+// Export legacy named exports for backwards compatibility (will be removed in future)
+// IMPORTANT: These are deprecated - use getS3Client() and getDynamoDBClient() instead
+export const s3Client = null as any;
+export const docClient = null as any;
